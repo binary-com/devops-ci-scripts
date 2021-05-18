@@ -21,6 +21,7 @@ CERT=""
 DOCKER_REPO=""
 DEFAULT_TAG=""
 TOKEN=""
+DEFAULT_REPLICA=""
 
 
 
@@ -32,7 +33,7 @@ title() {
   echo -n "$(tr '[:lower:]' '[:upper:]' <<< ${1:0:1})${1:1}"
 }
 get_active_deployment() {
-  kubectl -s ${server} --certificate-authority=${cert} --token=${token} -n ${namespace} get service "${service}" -o=jsonpath='{.spec.selector.version}'
+  kubectl -s ${server} --certificate-authority=${cert} --token=${token} -n ${namespace} get service "${service}" -o=jsonpath='{.spec.selector.env}'
 }
 
 set_image_tag() {
@@ -44,11 +45,19 @@ check_rollout_status() {
 }
 
 switchover_traffic_to_blue() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"version": "blue"}}}'
+  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "blue"}}}'
 }
 
 switchover_traffic_to_green() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"version": "green"}}}'
+  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "green"}}}'
+}
+
+scale_up() {
+  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} scale deployment/${service}-${1} --replicas ${2}
+}
+
+scale_down() {
+  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} scale deployment/${service}-${1} --replicas 0
 }
 
 rollout_back() {
@@ -66,12 +75,13 @@ display_usage_and_exit() {
   echo "service REQUIRED: The name of the service the script should trigger the Blue/Green deployment" >&2
   echo "image REQUIRED: Name of Docker image" >&2
   echo "-n OPTIONAL: the namespace scope for this CLI request, default is the 'default' namespace" >&2
-  echo "-l REQUIRED: The new docker tag to deployment" >&2
+  echo "-l REQUIRED: The new docker image tag to deploy" >&2
   echo "-t OPTIONAL: How long to wait for the deployment to be available, defaults to ${DEFAULT_TIMEOUT} seconds, must be greater than 60" >&2
   echo "-d REQUIRED: Name of Docker repository" >&2
   echo "-s REQUIRED: The address and port of the Kubernetes API server" >&2
   echo "-c REQUIRED: Path to a cert file for the certificate authority" >&2
   echo "-T REQUIRED: Token for authentication to the K8S API server" >&2
+  echo "-r REQUIRED: Number of replica" >&2
   exit 1
 }
 
@@ -82,8 +92,9 @@ docker_repo=${DOCKER_REPO}
 server=${API_SERVER}
 cert=${CERT}
 token=${TOKEN}
+replica=${DEFAULT_REPLICA}
 
-while getopts ':n:t:l:d:T:c:s:' arg
+while getopts ':n:t:l:d:T:c:s:r:' arg
 do
     case ${arg} in
         n) namespace=${OPTARG};;
@@ -93,11 +104,12 @@ do
         T) token=${OPTARG};;
         c) cert=${OPTARG};;
         s) server=${OPTARG};;
+        r) replica=${OPTARG};;
         *) display_usage_and_exit
     esac
 done
 
-if [[ -z ${docker_repo} || -z ${cert} || -z ${token} || -z ${server} || -z ${tag} ]]; then
+if [[ -z ${docker_repo} || -z ${cert} || -z ${token} || -z ${server} || -z ${tag} || -z ${replica} ]]; then
   display_usage_and_exit
 fi
 
@@ -115,17 +127,23 @@ fi
 current_deployment=$(get_active_deployment)
 
 if [ "${current_deployment}" = "green" ]; then
+  scale_up "blue" ${replica}
   set_image_tag "blue"
   if check_rollout_status "blue" ; then
     switchover_traffic_to_blue
+    scale_down "green"
   else
     rollout_back "blue"
+    scale_down "blue"
   fi 
 else
+  scale_up "green" ${replica}
   set_image_tag "green"
   if check_rollout_status "green" ; then
     switchover_traffic_to_green
+    scale_down "blue"
   else
     rollout_back "green"
+    scale_down "green"
   fi 
 fi

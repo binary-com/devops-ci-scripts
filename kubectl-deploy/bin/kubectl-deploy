@@ -14,15 +14,8 @@ set -o nounset
 set -o errexit
 set -o pipefail
 
-DEFAULT_NAMESPACE="default"
-DEFAULT_TIMEOUT=120
-API_SERVER=""
-CERT=""
-DOCKER_REPO=""
-DEFAULT_TAG=""
-TOKEN=""
-DEFAULT_REPLICA=""
 
+DEFAULT_TIMEOUT=180
 
 
 timestamp() {
@@ -32,102 +25,105 @@ timestamp() {
 title() {
   echo -n "$(tr '[:lower:]' '[:upper:]' <<< ${1:0:1})${1:1}"
 }
+get_active_environment() {
+  kubectl -n ${namespace} get service "${service}" -o=jsonpath='{.spec.selector.env}'
+}
+
 get_active_deployment() {
-  kubectl -s ${server} --certificate-authority=${cert} --token=${token} -n ${namespace} get service "${service}" -o=jsonpath='{.spec.selector.env}'
+  kubectl  -n ${namespace} get deployment --no-headers --selector=env=$(get_active_environment) --template '{{range .items}}{{.metadata.name}}{{"\n"}}{{end}}'
+}
+
+get_current_namespace() {
+  kubectl config view --minify | grep namespace | cut -f2 -d:
 }
 
 set_image_tag() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} set image deployment/${service}-${1} ${service}-${1}=${docker_repo}/${image}:${tag}
+  kubectl  -n ${namespace} set image deployment/${service}-${1} ${service}-${1}=${docker_image_url}
 }
 
 check_rollout_status() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} rollout status deployment/${service}-${1} --timeout ${timeout}s
+  kubectl  -n ${namespace} rollout status deployment/${service}-${1} --timeout ${timeout}s
 }
 
 switchover_traffic_to_blue() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "blue"}}}'
+  kubectl  -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "blue"}}}'
 }
 
 switchover_traffic_to_green() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "green"}}}'
+  kubectl  -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "green"}}}'
+}
+
+number_of_replica() {
+  kubectl  -n ${namespace} get deployment $(get_active_deployment) -o=jsonpath='{.spec.replicas}'
 }
 
 scale_up() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} scale deployment/${service}-${1} --replicas ${2}
+  kubectl -n ${namespace} scale deployment/${service}-${1} --replicas $(number_of_replica)
 }
 
 scale_down() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} scale deployment/${service}-${1} --replicas 0
+  kubectl  -n ${namespace} scale deployment/${service}-${1} --replicas 0
+}
+
+deploy_failed() {
+  echo "☠︎☠︎☠︎ ${timestamp} Error: Deployment on environment ${environment_name} failed for image \"${docker_image_url}\"☠︎☠︎☠︎"
+  exit 1
+}
+
+compatibility_error() {
+  echo "Error: The resources in the current k8s namespace doesn't compatible with Blue/Green deployment!!!"
+  exit 1
 }
 
 rollout_back() {
-  kubectl -s ${server} --certificate-authority=${cert} -n ${namespace} rollout undo deployment/${service}-${1}
+  kubectl -n ${namespace} rollout undo deployment/${service}-${1}
   timestamp=$(timestamp)
   environment_name=$(title "$1")
-  echo "☠︎☠︎☠︎ ${timestamp} Error: Deployment on environment ${environment_name} failed for image \"${docker_repo}/${image}:${tag}\"☠︎☠︎☠︎"
-  exit 1
+  deploy_failed
 }
 
+prepare_k8s() {
+  # TODO: Add tags if nedded but don't overwrite the existing ones
+  exit 1
+}
 
 display_usage_and_exit() {
-  echo "Usage: $(basename "$0") [-s <server>] [-c <ca path>] [-n <namespace>] [-T <token>] [-t <timeout>] [-l <tag>] [-d <docker_repo>] <service> <image>" >&2
+  echo "Usage: $(basename "$0") [-n <namespace>] [-t <timeout>] <service> <docker-image-url>" >&2
   echo "Arguments:" >&2
   echo "service REQUIRED: The name of the service the script should trigger the Blue/Green deployment" >&2
-  echo "image REQUIRED: Name of Docker image" >&2
-  echo "-n OPTIONAL: the namespace scope for this CLI request, default is the 'default' namespace" >&2
-  echo "-l REQUIRED: The new docker image tag to deploy" >&2
+  echo "docker-image-url REQUIRED: URL of Docker image and should follow this format: registry/<user>/<image>:<tag>" >&2
   echo "-t OPTIONAL: How long to wait for the deployment to be available, defaults to ${DEFAULT_TIMEOUT} seconds, must be greater than 60" >&2
-  echo "-d REQUIRED: Name of Docker repository" >&2
-  echo "-s REQUIRED: The address and port of the Kubernetes API server" >&2
-  echo "-c REQUIRED: Path to a cert file for the certificate authority" >&2
-  echo "-T REQUIRED: Token for authentication to the K8S API server" >&2
-  echo "-r REQUIRED: Number of replica" >&2
+  echo "-n OPTIONAL: the namespace scope for this CLI request, default is the CURRENT ACTIVE Namespace" >&2
   exit 1
 }
 
-namespace=${DEFAULT_NAMESPACE}
+namespace=$(get_current_namespace)
 timeout=${DEFAULT_TIMEOUT}
-tag=${DEFAULT_TAG}
-docker_repo=${DOCKER_REPO}
-server=${API_SERVER}
-cert=${CERT}
-token=${TOKEN}
-replica=${DEFAULT_REPLICA}
 
-while getopts ':n:t:l:d:T:c:s:r:' arg
+while getopts ':n:t:' arg
 do
     case ${arg} in
         n) namespace=${OPTARG};;
         t) timeout=${OPTARG};;
-        l) tag=${OPTARG};;
-        d) docker_repo=${OPTARG};;
-        T) token=${OPTARG};;
-        c) cert=${OPTARG};;
-        s) server=${OPTARG};;
-        r) replica=${OPTARG};;
         *) display_usage_and_exit
     esac
 done
-
-if [[ -z ${docker_repo} || -z ${cert} || -z ${token} || -z ${server} || -z ${tag} || -z ${replica} ]]; then
-  display_usage_and_exit
-fi
 
 shift $((OPTIND-1))
 if [ "$#" -ne 2 ] ; then   
   display_usage_and_exit
 fi
 readonly service="$1"
-readonly image="$2"
+readonly docker_image_url="$2"
 
 if [[ ${timeout} -le 60 ]]; then
   display_usage_and_exit
 fi
 
-current_deployment=$(get_active_deployment)
+current_deployment=$(get_active_environment)
 
-if [ "${current_deployment}" = "green" ]; then
-  scale_up "blue" ${replica}
+if [[ "${current_deployment}" = "green" && ! -z $(get_active_deployment) ]]; then
+  scale_up "blue"
   set_image_tag "blue"
   if check_rollout_status "blue" ; then
     switchover_traffic_to_blue
@@ -136,8 +132,8 @@ if [ "${current_deployment}" = "green" ]; then
     rollout_back "blue"
     scale_down "blue"
   fi 
-else
-  scale_up "green" ${replica}
+elif [[ "${current_deployment}" = "blue" && ! -z $(get_active_deployment) ]]; then
+  scale_up "green"
   set_image_tag "green"
   if check_rollout_status "green" ; then
     switchover_traffic_to_green
@@ -145,5 +141,7 @@ else
   else
     rollout_back "green"
     scale_down "green"
-  fi 
+  fi
+else
+  compatibility_error
 fi

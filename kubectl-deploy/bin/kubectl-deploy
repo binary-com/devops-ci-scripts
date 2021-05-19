@@ -38,11 +38,11 @@ get_current_namespace() {
 }
 
 set_image_tag() {
-  kubectl  -n ${namespace} set image deployment/${service}-${1} ${service}-${1}=${docker_image_url}
+  kubectl  -n ${namespace} set image deployment/${1} ${1}=${docker_image_url}
 }
 
 check_rollout_status() {
-  kubectl  -n ${namespace} rollout status deployment/${service}-${1} --timeout ${timeout}s
+  kubectl  -n ${namespace} rollout status deployment/${1} --timeout ${timeout}s
 }
 
 switchover_traffic_to_blue() {
@@ -58,11 +58,11 @@ number_of_replica() {
 }
 
 scale_up() {
-  kubectl -n ${namespace} scale deployment/${service}-${1} --replicas $(number_of_replica)
+  kubectl -n ${namespace} scale deployment/${1} --replicas $(number_of_replica)
 }
 
 scale_down() {
-  kubectl  -n ${namespace} scale deployment/${service}-${1} --replicas 0
+  kubectl  -n ${namespace} scale deployment/${1} --replicas 0
 }
 
 deploy_failed() {
@@ -76,10 +76,18 @@ compatibility_error() {
 }
 
 rollout_back() {
-  kubectl -n ${namespace} rollout undo deployment/${service}-${1}
+  kubectl -n ${namespace} rollout undo deployment/${1}
   timestamp=$(timestamp)
   environment_name=$(title "$1")
   deploy_failed
+}
+
+green_deployment_name() {
+  kubectl  -n ${namespace} get deployment --no-headers --selector=env=green --template '{{range .items}}{{.metadata.name}}{{"\n"}}{{end}}'
+}
+
+blue_deployment_name() {
+  kubectl  -n ${namespace} get deployment --no-headers --selector=env=blue --template '{{range .items}}{{.metadata.name}}{{"\n"}}{{end}}'
 }
 
 prepare_k8s() {
@@ -102,11 +110,11 @@ timeout=${DEFAULT_TIMEOUT}
 
 while getopts ':n:t:' arg
 do
-    case ${arg} in
+  case ${arg} in
         n) namespace=${OPTARG};;
         t) timeout=${OPTARG};;
         *) display_usage_and_exit
-    esac
+  esac
 done
 
 shift $((OPTIND-1))
@@ -123,24 +131,24 @@ fi
 current_deployment=$(get_active_environment)
 
 if [[ "${current_deployment}" = "green" && ! -z $(get_active_deployment) ]]; then
-  scale_up "blue"
-  set_image_tag "blue"
-  if check_rollout_status "blue" ; then
+  set_image_tag $(blue_deployment_name)
+  scale_up $(blue_deployment_name)
+  if check_rollout_status $(blue_deployment_name) ; then
     switchover_traffic_to_blue
-    scale_down "green"
+    scale_down $(green_deployment_name)
   else
-    rollout_back "blue"
-    scale_down "blue"
+    rollout_back $(blue_deployment_name)
+    scale_down $(blue_deployment_name)
   fi 
 elif [[ "${current_deployment}" = "blue" && ! -z $(get_active_deployment) ]]; then
-  scale_up "green"
-  set_image_tag "green"
-  if check_rollout_status "green" ; then
+  set_image_tag $(green_deployment_name)
+  scale_up $(green_deployment_name)
+  if check_rollout_status $(green_deployment_name) ; then
     switchover_traffic_to_green
-    scale_down "blue"
+    scale_down $(blue_deployment_name)
   else
-    rollout_back "green"
-    scale_down "green"
+    rollout_back $(green_deployment_name)
+    scale_down $(green_deployment_name)
   fi
 else
   compatibility_error

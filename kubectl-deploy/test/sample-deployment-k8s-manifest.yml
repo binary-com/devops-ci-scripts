@@ -12,13 +12,14 @@ metadata:
   namespace: test-blue-green
   labels:
     app: kubectldeploy-test
-    env: blue
+    version: version1
+    env: green
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: kubectldeploy-test
-      env: blue
+      env: green
   strategy:
     rollingUpdate:
       maxSurge: 25%
@@ -28,7 +29,8 @@ spec:
     metadata:
       labels:
         app: kubectldeploy-test
-        env: blue
+        version: version1
+        env: green
     spec:
       containers:
         - name: kubectldeploy-test-1
@@ -62,13 +64,14 @@ metadata:
   namespace: test-blue-green
   labels:
     app: kubectldeploy-test
-    env: green
+    version: version2
+    env: blue
 spec:
   replicas: 0
   selector:
     matchLabels:
       app: kubectldeploy-test
-      env: green
+      env: blue
   strategy:
     rollingUpdate:
       maxSurge: 25%
@@ -78,7 +81,8 @@ spec:
     metadata:
       labels:
         app: kubectldeploy-test
-        env: green
+        version: version2
+        env: blue
     spec:
       containers:
         - name: kubectldeploy-test-2
@@ -112,10 +116,11 @@ metadata:
   name: kubectldeploy-test
   labels:
     app: kubectldeploy-test
+    version: latest
 spec:
   selector:
     app: kubectldeploy-test
-    env: blue
+    env: green
   ports:
     - name: web
       protocol: TCP

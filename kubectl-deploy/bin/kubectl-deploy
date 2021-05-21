@@ -29,6 +29,16 @@ get_active_environment() {
   kubectl -n ${namespace} get service "${service}" -o=jsonpath='{.spec.selector.env}'
 }
 
+get_active_version() {
+  kubectl -n ${namespace} get service "${service}" -o=jsonpath='{.metadata.labels.version}'
+}
+
+get_latest_version() {
+  # Extract docker image tag from docker_image_url, default is `latest`
+  [[ ! -z  $(echo -n ${docker_image_url}|awk -F ':' '{print $2}') ]] && docker_image_tag=$(echo -n ${docker_image_url}|awk -F ':' '{print $2}') || docker_image_tag="latest"
+  echo -n ${docker_image_tag}
+}
+
 get_active_deployment() {
   kubectl  -n ${namespace} get deployment --no-headers --selector=env=$(get_active_environment) --template '{{range .items}}{{.metadata.name}}{{"\n"}}{{end}}'
 }
@@ -37,8 +47,19 @@ get_current_namespace() {
   kubectl config view --minify | grep namespace | cut -f2 -d:
 }
 
+get_current_version() {
+  kubectl -n ${namespace} get deployment deployment/${1} -o=jsonpath='{.spec.template.metadata.labels.version}'
+}
+
 set_image_tag() {
-  kubectl  -n ${namespace} set image deployment/${1} ${1}=${docker_image_url}
+  if [[ $2 == $(get_active_version) ]]; then
+    echo "FATAL: Current version is already live, change the version of app to update!"
+    exit 1
+  else
+    kubectl  -n ${namespace} patch deployment/${1} --type json -p='[{"op": "replace", "path": "/spec/template/metadata/labels/version", "value":"'${2}'"}]'
+    kubectl  -n ${namespace} patch deployment/${1} --type json -p='[{"op": "replace", "path": "/metadata/labels/version", "value":"'${2}'"}]'
+    kubectl  -n ${namespace} set image deployment/${1} ${1}=${docker_image_url}
+  fi
 }
 
 check_rollout_status() {
@@ -47,10 +68,12 @@ check_rollout_status() {
 
 switchover_traffic_to_blue() {
   kubectl  -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "blue"}}}'
+  kubectl  -n ${namespace} patch service ${service} --type json -p='[{"op": "replace", "path": "/metadata/labels/version", "value":"'${1}'"}]'
 }
 
 switchover_traffic_to_green() {
   kubectl  -n ${namespace} patch service ${service} -p '{"spec":{"selector":{"env": "green"}}}'
+  kubectl  -n ${namespace} patch service ${service} --type json -p='[{"op": "replace", "path": "/metadata/labels/version", "value":"'${1}'"}]'
 }
 
 number_of_replica() {
@@ -62,16 +85,15 @@ scale_up() {
 }
 
 scale_down() {
-  kubectl  -n ${namespace} scale deployment/${1} --replicas 0
+  kubectl -n ${namespace} scale deployment/${1} --replicas 0
 }
 
 deploy_failed() {
-  echo "☠︎☠︎☠︎ ${timestamp} Error: Deployment on environment ${environment_name} failed for image \"${docker_image_url}\"☠︎☠︎☠︎"
-  exit 1
+  echo "☠︎☠︎☠︎ ${timestamp} ERROR: Deployment on environment ${environment_name} failed for image \"${docker_image_url}\"☠︎☠︎☠︎"
 }
 
 compatibility_error() {
-  echo "Error: The resources in the current k8s namespace doesn't compatible with Blue/Green deployment!!!"
+  echo "FATAL: The resources in the current k8s namespace doesn't compatible with Blue/Green deployment!!!"
   exit 1
 }
 
@@ -131,20 +153,20 @@ fi
 current_deployment=$(get_active_environment)
 
 if [[ "${current_deployment}" = "green" && ! -z $(get_active_deployment) ]]; then
-  set_image_tag $(blue_deployment_name)
+  set_image_tag $(blue_deployment_name) $(get_latest_version)
   scale_up $(blue_deployment_name)
   if check_rollout_status $(blue_deployment_name) ; then
-    switchover_traffic_to_blue
+    switchover_traffic_to_blue $(get_latest_version)
     scale_down $(green_deployment_name)
   else
     rollout_back $(blue_deployment_name)
     scale_down $(blue_deployment_name)
   fi 
 elif [[ "${current_deployment}" = "blue" && ! -z $(get_active_deployment) ]]; then
-  set_image_tag $(green_deployment_name)
+  set_image_tag $(green_deployment_name) $(get_latest_version)
   scale_up $(green_deployment_name)
   if check_rollout_status $(green_deployment_name) ; then
-    switchover_traffic_to_green
+    switchover_traffic_to_green $(get_latest_version)
     scale_down $(blue_deployment_name)
   else
     rollout_back $(green_deployment_name)

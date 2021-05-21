@@ -25,7 +25,7 @@ $ chmod +x /usr/local/bin/kubectl-deploy
 
 ### Usage
 
-```bash
+```
 $ kubectl deploy -h
 Usage: kubectl-deploy [-n <namespace>] [-t <timeout>] <service> <docker-image-url>
 Arguments:
@@ -39,14 +39,14 @@ docker-image-url REQUIRED: URL of Docker image and should follow this format: re
 `kubectl-deploy` expect two `Deployment`s and one `Service`, that points to one of those in the active k8s cluster & namespace.
 name of `Deployments` and `Service` doesn’t matter and could be anything, and also how the `Service` exposed to outside of
 Kubernetes cluster.
-**But the Deployments must have `env: blue|green` lables and Service must have `.spec.selector.env=blue|green`**
+**But the Deployments must have `env: blue|green` & `version` lables and Service must have `.spec.selector.env=blue|green` & `version` lable**
 **Otherwise deployment will fails with below Error:**
-```sh
+```
 Error: The resources in the current k8s namespace doesn't compatible with Blue/Green deployment!!!
 ```
 
 e.g: Sample k8s design on current namespace:
-```bash
+```
 $ kubectl get deployment
 NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
 prod-blue                    2/2     2            2           4h1m

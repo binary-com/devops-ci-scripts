@@ -37,7 +37,7 @@ if [[ -z $APP_NAME || -z $VERSION ]]; then
 fi
 
 # Find what version is currently deployed
-CURRENT_VERSION=$(kubectl get -o jsonpath="{.spec.selector.version}" services/$APP_NAME)
+CURRENT_VERSION=$(kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} get -o jsonpath="{.spec.selector.version}" services/$APP_NAME)
 
 if [[ -z $CURRENT_VERSION ]]; then
   echo "FATAL: Unable to find current version deployed"
@@ -45,7 +45,7 @@ if [[ -z $CURRENT_VERSION ]]; then
 fi
 
 # Find which deployment is live, using a label selector
-OLD_DEPLOYMENT=$(kubectl get deployment -l version=${CURRENT_VERSION},app=${APP_NAME} -o jsonpath='{.items[*].metadata.name}')
+OLD_DEPLOYMENT=$(kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} get deployment -l version=${CURRENT_VERSION},app=${APP_NAME} -o jsonpath='{.items[*].metadata.name}')
 
 if [[ -z $OLD_DEPLOYMENT ]]; then
   echo "FATAL: Unable to find live deployment for $CURRENT_VERSION"
@@ -53,7 +53,7 @@ if [[ -z $OLD_DEPLOYMENT ]]; then
 fi
 
 # Find which deployment is dormant
-NEW_DEPLOYMENT=$(kubectl get deployment -l version=${DORMANT_VERSION},app=${APP_NAME} -o jsonpath='{.items[*].metadata.name}')
+NEW_DEPLOYMENT=$(kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} get deployment -l version=${DORMANT_VERSION},app=${APP_NAME} -o jsonpath='{.items[*].metadata.name}')
 
 if [[ -z $NEW_DEPLOYMENT ]]; then
   echo "FATAL: Unable to find spare dormant deployment"
@@ -69,17 +69,17 @@ fi
 # Need to know in advance what to scale the dormant deployment to, and apply that immediately after the image setting
 # We use the hpa because we don't want to get caught out when it was about to scale but hasn't yet
 # ( Could probably do this in one command, but I think it'd require eval'ing the output and we don't want to ever do that!
-DESIRED_REPLICAS=$(kubectl get hpa/${APP_NAME} -o jsonpath='{.status.desiredReplicas}')
+DESIRED_REPLICAS=$(kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} get hpa/${APP_NAME} -o jsonpath='{.status.desiredReplicas}')
 
 # But Desired replicas from the HPA can be < minimum, so we need to take that into account
 # Min Replicas over Current, in case there's an issue with the current deployment
-MIN_REPLICAS=$(kubectl get hpa/${APP_NAME} -o jsonpath='{.spec.minReplicas}')
+MIN_REPLICAS=$(kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} get hpa/${APP_NAME} -o jsonpath='{.spec.minReplicas}')
 
 TARGET_REPLICAS=$(( DESIRED_REPLICAS > MIN_REPLICAS ? DESIRED_REPLICAS : MIN_REPLICAS ))
 
 
 
-kubectl patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
 {\
 "metadata":{"labels":{"version":"${VERSION}"}},\
 "spec":{\
@@ -89,18 +89,18 @@ kubectl patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
 _END_OF_PATCH
 )
 
-kubectl scale --replicas=$TARGET_REPLICAS deployment/$NEW_DEPLOYMENT
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} scale --replicas=$TARGET_REPLICAS deployment/$NEW_DEPLOYMENT
 
 # Rollout will block until timeout or rollout is complete
-kubectl rollout status --watch --timeout=$RELEASE_TIMEOUT deployment/$NEW_DEPLOYMENT
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} rollout status --watch --timeout=$RELEASE_TIMEOUT deployment/$NEW_DEPLOYMENT
 if [[ $? != 0 ]]; then
   # The deployment failed. We don't need to do rollback, because we haven't switched the service over
   # Better to leave it in a state we can introsepct
   echo "FATAL: Rollout of new version failed! Release aborted. Deployment status:"
-  kubectl describe deployment/$NEW_DEPLOYMENT
+  kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} describe deployment/$NEW_DEPLOYMENT
 
   # Set the new deployment to be dormant again ready for the next release
-  kubectl patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
+  kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
 {\
 "metadata":{"labels":{"version":"${DORMANT_VERSION}"}},\
 "spec":{\
@@ -110,23 +110,23 @@ _END_OF_PATCH
   )
 
   echo "INFO: Scaling the dormant deployment back down to 0"
-  kubectl scale --replicas=0 deployment/$NEW_DEPLOYMENT
+  kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} scale --replicas=0 deployment/$NEW_DEPLOYMENT
   exit 1
 fi
 
 # Now the rollout is ready, we can switch the traffic over
-kubectl patch service $APP_NAME -p '{"spec":{"selector":{"version":"'${VERSION}'"}}}'
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} patch service $APP_NAME -p '{"spec":{"selector":{"version":"'${VERSION}'"}}}'
 # And switch the hpa over
-kubectl patch hpa $APP_NAME -p '{"spec":{"scaleTargetRef":{"name":"'${NEW_DEPLOYMENT}'"}}}'
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} patch hpa $APP_NAME -p '{"spec":{"scaleTargetRef":{"name":"'${NEW_DEPLOYMENT}'"}}}'
 
 # It's just a catch to be careful in case the drain doesn't work.
 sleep 2
 
 # We can scale the old deployment down to save resources
-kubectl scale --replicas=0 deployment/$OLD_DEPLOYMENT
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} scale --replicas=0 deployment/$OLD_DEPLOYMENT
 
 # Set the old deployment to be dormant ready for the next release
-kubectl patch deployment $OLD_DEPLOYMENT -p $(cat <<_END_OF_PATCH
+kubectl -n ${NAMESPACE} -s ${KUBE_SERVER} --certificate-authority=${CA} --token=${SERVICEACCOUNT_TOKEN} patch deployment $OLD_DEPLOYMENT -p $(cat <<_END_OF_PATCH
 {\
 "metadata":{"labels":{"version":"${DORMANT_VERSION}"}},\
 "spec":{\

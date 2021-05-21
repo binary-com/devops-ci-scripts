@@ -13,6 +13,8 @@
 
 # This prototypoe is currently in deriv-com, but could be abstracted and injected into a build_tools/ for all our blue-green apps
 
+# TODO - Setup the kubectl context so that kubectl works without arguments. We should not have to pass things like --server to it
+
 # Argument passing
 APP_NAME=$1
 VERSION=$2
@@ -75,7 +77,7 @@ MIN_REPLICAS=$(kubectl get hpa/${APP_NAME} -o jsonpath='{.spec.minReplicas}')
 
 TARGET_REPLICAS=$(( DESIRED_REPLICAS > MIN_REPLICAS ? DESIRED_REPLICAS : MIN_REPLICAS ))
 
-# TODO - Setup the kubectl context so that kubectl works without arguments. We should not have to pass things like --server to it
+
 
 kubectl patch deployment $NEW_DEPLOYMENT -p $(cat <<_END_OF_PATCH
 {\

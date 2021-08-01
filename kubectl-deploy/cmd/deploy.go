@@ -1,3 +1,18 @@
+/*
+Copyright © 2021 Deriv <sysadmin@deriv.com>
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 package cmd
 
 import (
@@ -10,6 +25,7 @@ import (
 
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
@@ -37,8 +53,7 @@ func getOldDeployment(appName string) string {
 
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("FATAL: Unable to find live deployment for '%s' version\n", getCurrentVersion(appName))
-			os.Exit(1)
+			logger(fmt.Sprintf("Unable to find live deployment for '%s' version\n", getCurrentVersion(appName)), Fatal)
 		}
 	}()
 
@@ -62,8 +77,7 @@ func getNewDeployment(appName string) string {
 
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println("FATAL: Unable to find spare dormant deploymen")
-			os.Exit(1)
+			logger(fmt.Sprintf("Deployment name or tags are wrong, run 'kubectl deploy show %s' for more details", appName), Fatal)
 		}
 	}()
 
@@ -74,8 +88,11 @@ func blueGreenDeploy(appName string, version string) {
 	newDeploymentName := getNewDeployment(appName)
 	oldDeploymentName := getOldDeployment(appName)
 	if newDeploymentName == oldDeploymentName {
-		fmt.Println("FATAL: Something is wrong, Dormant and Live are somehow the same")
-		os.Exit(1)
+		logger(fmt.Sprintf("Deployment name or tags are wrong, run 'kubectl deploy show %s' for more details", appName), Fatal)
+	}
+
+	if getCurrentVersion(appName) == version {
+		logger(fmt.Sprintf("App '%s' with version '%s' already exists, run 'kubectl deploy show %s' for more details", appName, version, appName), Fatal)
 	}
 
 	dockerHub := getDockerHub()
@@ -90,13 +107,8 @@ func blueGreenDeploy(appName string, version string) {
 	rolloutStatus := waitRolloutStatus(newDeploymentName, appName, targetReplicas, version)
 
 	if !rolloutStatus {
-		fmt.Println("FATAL: Rollout of new version failed! Release aborted.")
 		// TODO: deploymentStatus
-
-		// Set the new deployment to be dormant again ready for the next release
-		scaleDeployment(newDeploymentName, 0)
-		patchDeployment(newDeploymentName, "dormant", dockerHub, "dormant")
-		os.Exit(1)
+		logger("Rollout of new version failed! Release aborted.", Fatal)
 	}
 
 	switchOverService(appName, version)
@@ -104,17 +116,21 @@ func blueGreenDeploy(appName string, version string) {
 	// Scale down old deployment to zero
 	scaleDeployment(oldDeploymentName, 0)
 	// Set the old deployment to be dormant ready for the next release
-	patchDeployment(oldDeploymentName, "dormant", dockerHub, "dormant")
-	fmt.Println("Success: Release complete")
+	patchDeployment(oldDeploymentName, "dormant", dockerHub, imageName)
+	logger("Success: Release complete", Info)
 }
 
 func waitRolloutStatus(deploymentName string, appName string, targetReplicas int32, version string) bool {
+	dockerHub := getDockerHub()
+	imageName := getImageName()
+
 	clientset, namespace := clientSet()
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println("FATAL: Unable to find spare deploymen")
 			// TODO: Rollback dormant and scale down to zero
-			os.Exit(1)
+			scaleDeployment(deploymentName, 0)
+			patchDeployment(deploymentName, "dormant", dockerHub, imageName)
+			logger("Unable to find spare deploymen", Fatal)
 		}
 	}()
 
@@ -138,7 +154,10 @@ func waitRolloutStatus(deploymentName string, appName string, targetReplicas int
 			time.Sleep(5 * time.Second)
 			continue
 		} else if timeout <= 0 {
-			fmt.Printf("deployment '%s' rollout timeout\n", deploymentName)
+			// Set the new deployment to be dormant again ready for the next release
+			scaleDeployment(deploymentName, 0)
+			patchDeployment(deploymentName, "dormant", dockerHub, imageName)
+			logger(fmt.Sprintf("deployment '%s' rollout timeout\n", deploymentName), Warn)
 			return false
 		} else if deployments.Items[0].Status.ReadyReplicas == targetReplicas {
 			fmt.Printf("deployment '%s' successfully rolled out to version '%s'\n", deploymentName, version)
@@ -225,4 +244,25 @@ func patchDeployment(deploymentName string, version string, dockerHub string, im
 		os.Exit(1)
 	}
 	fmt.Printf("deployment.apps/%s patched\n", deploymentName)
+}
+
+func findDeployment(appName string, color string) (deployName, gDeployAppLabel, deployVerLabel string) {
+	clientset, namespace := clientSet()
+
+	deployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), appName+"-"+color, v1.GetOptions{})
+	if err != nil {
+		deployName = "<Not Found>"
+	} else {
+		deployName = deployment.Name
+	}
+
+	deployAppLabel, ok := deployment.Labels["app"]
+	if !ok {
+		deployAppLabel = "<Not Found>"
+	}
+	deployVerLabel, ok = deployment.Labels["version"]
+	if !ok {
+		deployVerLabel = "<Not Found>"
+	}
+	return deployName, deployAppLabel, deployVerLabel
 }

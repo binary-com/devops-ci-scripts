@@ -1,15 +1,15 @@
 # FE deployment mechanism
 
-- get the `fe_k8s_secrets` secret from LP
+- get the `fe_k8s_secrets` secret from org password vault
 - get the `CA_CRT` value and save that as `ca.crt` file in the same path as deployment script `release.sh`
 - save this file as `variables.sh` and use `source` to append the variables in current shell
 
 ```
 #!/usr/bin/env bash
-export KUBE_SERVER="LP_COPIED_VALUE"
-export SERVICEACCOUNT_TOKEN="LP_COPIED_VALUE"
+export KUBE_SERVER="COPIED_VALUE"
+export SERVICEACCOUNT_TOKEN="COPIED_VALUE"
 export CA="ca.crt"
-export DOCKERHUB_ORGANISATION="LP_COPIED_VALUE"
+export DOCKERHUB_ORGANISATION="COPIED_VALUE"
 export NAMESPACE="sinbad-software-staging"          # you need to change the namespace name where you want to trigger changes
 export APP_NAME="sinbad-software"                   # you need to change the app_name here 
 export APP_VERSION="latest"
